@@ -131,6 +131,8 @@ pub fn countP2(map: std.StringHashMap(Node), needle: []const u8) anyerror!usize 
 }
 
 pub fn main() !void {
+    const begin = @divTrunc(std.time.nanoTimestamp(), 1000);
+
     // allocator
     defer _ = gpa.deinit();
     var allo = &gpa.allocator;
@@ -165,4 +167,7 @@ pub fn main() !void {
     while (iter.next()) |kv| {
         defer kv.value.deinit();
     }
+
+    const delta = @divTrunc(std.time.nanoTimestamp(), 1000) - begin;
+    print("all done in {} microseconds\n", .{delta});
 }
