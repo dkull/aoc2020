@@ -17,6 +17,20 @@ const State = enum {
 
 const Coord = ArrayList(isize);
 
+fn hashFn(a: Coord) u32 {
+    var hash: u32 = 1;
+    for (a.items) |val, i| {
+        hash += @intCast(u32, val) * ((@intCast(u32, i) * 0xff) + 1);
+    }
+    return hash;
+}
+
+fn eqlFn(a: Coord, b: Coord) bool {
+    return std.mem.eql(isize, a.items, b.items);
+}
+
+const CoordHashMap = std.ArrayHashMap(Coord, Cube, hashFn, eqlFn, true);
+
 fn getCoordNeighbors(allo: *std.mem.Allocator, coord: Coord) !ArrayList(Coord) {
     var res = ArrayList(Coord).init(allo);
 
@@ -27,18 +41,16 @@ fn getCoordNeighbors(allo: *std.mem.Allocator, coord: Coord) !ArrayList(Coord) {
     const dims = coord.items.len;
     const elems = std.math.pow(usize, range, dims);
 
-    info("GETTING NEIGHBORS FOR {} {} {}", .{ coord[0], coord[1], coord[2] });
     var i: usize = 0;
     while (i < elems) : (i += 1) {
         var new_coord = ArrayList(isize).init(allo);
-        for (coord.items) |_, j| {
+        for (coord.items) |pnt, j| {
             const val: usize = @divTrunc(i, std.math.pow(usize, range, j)) % range;
-            const modded_val = @intCast(isize, val) + offset;
+            const modded_val = pnt + @intCast(isize, val) + offset;
             try new_coord.append(modded_val);
         }
 
         if (!std.mem.eql(isize, new_coord.items, coord.items)) {
-            info("  found neighbor {} {} {}", .{ new_coord[0], new_coord[1], new_coord[2] });
             try res.append(new_coord);
         } else {
             new_coord.deinit();
@@ -48,7 +60,7 @@ fn getCoordNeighbors(allo: *std.mem.Allocator, coord: Coord) !ArrayList(Coord) {
     return res;
 }
 
-fn countActiveCubes(cubes: std.AutoHashMap(Coord, Cube)) usize {
+fn countActiveCubes(cubes: CoordHashMap) usize {
     var res: usize = 0;
     var cubes_iter = cubes.iterator();
     while (cubes_iter.next()) |cube| {
@@ -87,12 +99,11 @@ const Cube = struct {
         return self.near_coords;
     }
 
-    pub fn calcNextState(self: *Cube, neighbors: std.AutoHashMap(Coord, Cube)) void {
+    pub fn calcNextState(self: *Cube, neighbors: *CoordHashMap) void {
         const neighbor_coords = self.getNearCoords();
         var actives: usize = 0;
         for (neighbor_coords.items) |nc, i| {
             // active block must have all neighboring blocks
-            info("calcing on {} {} {}", .{ nc.items[0], nc.items[1], nc.items[2] });
             const neighbor = neighbors.get(nc) orelse {
                 if (self.state == .inactive) {
                     continue;
@@ -126,13 +137,13 @@ const Cube = struct {
     }
 };
 
-fn doTask(allo: *std.mem.Allocator, cubes: *std.AutoHashMap(Coord, Cube)) void {
+fn doTask(allo: *std.mem.Allocator, cubes: *CoordHashMap) void {
     var cycle: usize = 0;
     while (cycle < 6) : (cycle += 1) {
         // add all inactive neighoring cubes
-        info("cycle: {} cubes: {}", .{ cycle, countActiveCubes(cubes.*) });
+        print("cycle: {} cubes: {}\n", .{ cycle, countActiveCubes(cubes.*) });
 
-        var new_cubes = ArrayList(Cube).init(allo);
+        var new_cubes = CoordHashMap.init(allo);
         defer new_cubes.deinit();
 
         var iter_cubes = cubes.iterator();
@@ -147,22 +158,31 @@ fn doTask(allo: *std.mem.Allocator, cubes: *std.AutoHashMap(Coord, Cube)) void {
                     continue;
                 }
 
+                // do not add already seen new
+                if (new_cubes.get(near_coord)) |existing| {
+                    continue;
+                }
+
+                // make a copy of the coords
                 var cube_coord = ArrayList(isize).init(allo);
                 cube_coord.appendSlice(near_coord.items) catch unreachable;
 
                 // init all non-existant cubes as inactive
                 const new_cube = Cube.init(allo, cube_coord, .inactive);
-                new_cubes.append(new_cube) catch unreachable;
+                new_cubes.put(new_cube.coord, new_cube) catch unreachable;
             }
         }
 
-        for (new_cubes.items) |new_cube| {
-            cubes.put(new_cube.coord, new_cube) catch unreachable;
+        var new_cubes_iter = new_cubes.iterator();
+        while (new_cubes_iter.next()) |new_cube_kv| {
+            const new_coord = new_cube_kv.key;
+            const new_cube = new_cube_kv.value;
+            cubes.put(new_coord, new_cube) catch unreachable;
         }
 
         iter_cubes = cubes.iterator();
-        while (iter_cubes.next()) |cube| {
-            cube.value.calcNextState(cubes.*);
+        while (iter_cubes.next()) |cube_kv| {
+            cube_kv.value.calcNextState(cubes);
         }
 
         iter_cubes = cubes.iterator();
@@ -184,17 +204,8 @@ pub fn main() !void {
     var lines: std.mem.TokenIterator = try utils.readInputLines(allo, "./input1");
     defer allo.free(lines.buffer);
 
-    var p1_cubes = std.AutoHashMap(Coord, Cube).init(allo);
-    defer {
-        var p1_iter = p1_cubes.iterator();
-        while (p1_iter.next()) |kv| {
-            kv.value.deinit();
-        }
-        p1_cubes.deinit();
-    }
-
-    var p2_cubes = std.AutoHashMap(Coord, Cube).init(allo);
-    defer p2_cubes.deinit();
+    var p1_cubes = CoordHashMap.init(allo);
+    var p2_cubes = CoordHashMap.init(allo);
 
     // load initial cubes
 
@@ -206,6 +217,8 @@ pub fn main() !void {
                 continue;
             }
 
+            // p1
+
             var p1_coord_slic = [_]isize{ x, y, 0 };
             var p1_coord = ArrayList(isize).init(allo);
             p1_coord.appendSlice(p1_coord_slic[0..]) catch unreachable;
@@ -213,20 +226,41 @@ pub fn main() !void {
             const p1_cube = Cube.init(allo, p1_coord, .active);
             p1_cubes.put(p1_cube.coord, p1_cube) catch unreachable;
 
-            //var p2_coord = ArrayList(isize).init(allo);
-            //p2_coord.append(x) catch unreachable;
-            //p2_coord.append(y) catch unreachable;
-            //p2_coord.append(0) catch unreachable;
-            //p2_coord.append(0) catch unreachable;
-            //const p2_cube = Cube.init(allo, p2_coord, .active);
-            //p2_cubes.put(p2_coord, p2_cube) catch unreachable;
+            // p2
+            var p2_coord_slic = [_]isize{ x, y, 0, 0 };
+            var p2_coord = ArrayList(isize).init(allo);
+            p2_coord.appendSlice(p2_coord_slic[0..]) catch unreachable;
+
+            const p2_cube = Cube.init(allo, p2_coord, .active);
+            p2_cubes.put(p2_cube.coord, p2_cube) catch unreachable;
         }
     }
 
-    // task
+    // task p1
 
+    print("doin task p1\n", .{});
     doTask(allo, &p1_cubes);
-    info("p1: {}", .{countActiveCubes(p1_cubes)});
+    print("p1: {}\n", .{countActiveCubes(p1_cubes)});
+    defer {
+        var p1_iter = p1_cubes.iterator();
+        while (p1_iter.next()) |kv| {
+            kv.value.deinit();
+        }
+        p1_cubes.deinit();
+    }
+
+    // task p2
+
+    print("doin task p2\n", .{});
+    doTask(allo, &p2_cubes);
+    print("p2: {}\n", .{countActiveCubes(p2_cubes)});
+    defer {
+        var p2_iter = p2_cubes.iterator();
+        while (p2_iter.next()) |kv| {
+            kv.value.deinit();
+        }
+        p2_cubes.deinit();
+    }
 
     // end
     const delta = @divTrunc(std.time.nanoTimestamp(), 1000) - begin;
