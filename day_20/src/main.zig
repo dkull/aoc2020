@@ -13,7 +13,7 @@ var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const DIM: usize = 10;
 
 const Edge = enum {
-    left, right, top, bottom
+    left, right, top, bot
 };
 
 fn cmpPalindrome(a: []const u8, b: []const u8) bool {
@@ -44,9 +44,13 @@ const ProcessResponse = struct {
 const Tile = struct {
     id: usize,
     data: [DIM][DIM]u8 = undefined,
-    links: struct {
-        top: ?*Tile, lef: ?*Tile, bot: ?*Tile, rig: ?*Tile
-    } = undefined,
+    top_link: ?*Tile = null,
+    bot_link: ?*Tile = null,
+    left_link: ?*Tile = null,
+    right_link: ?*Tile = null,
+    //links: struct {
+    //    top: ?*Tile, lef: ?*Tile, bot: ?*Tile, rig: ?*Tile
+    //} = undefined,
 
     pub fn init(line: []const u8) !Tile {
         const id = try std.fmt.parseInt(usize, line[5 .. line.len - 1], 10);
@@ -58,71 +62,135 @@ const Tile = struct {
     }
 
     fn can_rotate(self: *Tile) bool {
-        return self.top == null and self.lef == null and self.rig == null and self.bot == null;
+        return self.top_link == null and self.left_link == null and self.right_link == null and self.bot_link == null;
     }
 
     fn rotate_r(self: *Tile) void {
         var new_data: [DIM][DIM]u8 = undefined;
 
-        var i = 0;
-        var j = 0;
+        var i: u32 = 0;
         while (i < DIM) : (i += 1) {
+            var j: u32 = 0;
             while (j < DIM) : (j += 1) {
-                new_data[i][j] = self.data[n - j - 1][i];
+                new_data[i][j] = self.data[DIM - j - 1][i];
             }
         }
 
-        var k = 0;
+        var k: u32 = 0;
         while (k < DIM) : (k += 1) {
-            std.mem.copy(u8, self.data[k], new_data[k]);
+            std.mem.copy(u8, &self.data[k], &new_data[k]);
+        }
+    }
+
+    fn flip_v(self: *Tile) void {
+        for (self.data) |*row| {
+            std.mem.reverse(u8, row);
+        }
+    }
+
+    fn flip_h(self: *Tile) void {
+        std.mem.reverse([DIM]u8, &self.data);
+    }
+
+    pub fn match_edge(self: *Tile, target: [DIM]u8, edge: Edge) bool {
+        var i: u32 = 0;
+        var buf: [DIM]u8 = undefined;
+        while (i < 4) : (i += 1) {
+            self.get_edge(edge, &buf, false);
+            if (std.mem.eql(u8, &target, &buf)) return true;
+
+            self.flip_v();
+            self.get_edge(edge, &buf, false);
+            if (std.mem.eql(u8, &target, &buf)) return true;
+
+            self.flip_h();
+            self.get_edge(edge, &buf, false);
+            if (std.mem.eql(u8, &target, &buf)) return true;
+
+            self.flip_v();
+            self.get_edge(edge, &buf, false);
+            if (std.mem.eql(u8, &target, &buf)) return true;
+
+            if (!self.can_rotate()) { // no rotations allowed
+                break;
+            }
+
+            self.rotate_r();
+        }
+
+        return false;
+    }
+
+    pub fn get_edge(self: *Tile, edge: Edge, output: []u8, reversed: bool) void {
+        _ = switch (edge) {
+            .top => std.mem.copy(u8, output, &self.data[0]),
+            .bot => std.mem.copy(u8, output, &self.data[DIM - 1]),
+            .left => for (self.data) |row, i| {
+                output[i] = row[0];
+            },
+            .right => for (self.data) |row, i| {
+                output[i] = row[DIM - 1];
+            },
+        };
+
+        if (reversed) {
+            std.mem.reverse(u8, output);
         }
     }
 
     pub fn process(self: *Tile, others: []Tile) usize {
-        var matches: usize = 0;
+        info("=== tile {} ===", .{self.id});
 
-        for (others) |other| {
-            const done = other.rotate_match_to_direction(self.data[0], .bottom);
-            if (!done) continue;
-            self.top_link = other;
-            other.process(others);
-            break;
+        var matches: usize = 0;
+        var buf: [DIM]u8 = undefined;
+
+        for (self.data) |row| {
+            info(">> {}", .{row});
         }
 
-        for (self.links) |link, i| {
-            // rotate the whole image
-            self.rotate_r();
-            for (others) |other| {
-                other.rotate_r();
+        for (others) |*other| {
+            if (other.id == self.id) continue;
+
+            info("  -- in other {}", .{other.id});
+
+            self.get_edge(.top, &buf, false);
+            info("  find top {}", .{buf});
+            if (other.match_edge(buf, .bot)) {
+                info("  !! {} got top {} >> {}", .{ self.id, other.id, buf });
+                self.top_link = other;
+                other.bot_link = self;
+                matches += 1;
+                continue;
             }
 
-            // skip if my other edge already bound
-            if (link != null) continue;
+            self.get_edge(.bot, &buf, false);
+            info("  find bot {}", .{buf});
+            if (other.match_edge(buf, .top)) {
+                info("  !! {} got bot {} >> {}", .{ self.id, other.id, buf });
+                self.bot_link = other;
+                other.top_link = self;
+                matches += 1;
+                continue;
+            }
 
-            const row = self.data[DIM - 1];
+            self.get_edge(.left, &buf, false);
+            info("  find left {}", .{buf});
+            if (other.match_edge(buf, .right)) {
+                info("  !! {} got left {} >> {}", .{ self.id, other.id, buf });
+                self.left_link = other;
+                other.right_link = self;
+                matches += 1;
+                continue;
+            }
 
-            for (others) |other| {
-                // don't do myself
-                if (other.id == self.id) continue;
-
-                for (other.links) |other_link| {
-                    // skip if this other edge already bound
-                    if (other_link != null) continue;
-
-                    const are_palindromes = cmpPalindrome(edge[0..], other_edge[0..]);
-                    if (are_palindromes) {
-                        const tgt = switch (i) {
-                            0 => &self.links.top,
-                            1 => &self.links.bot,
-                            2 => &self.links.rig,
-                            3 => &self.links.lef,
-                            else => unreachable,
-                        };
-                        tgt.* = other.id;
-
-                        matches += @as(usize, 1);
-                    }
-                }
+            self.get_edge(.right, &buf, false);
+            info("  find right {}", .{buf});
+            if (other.match_edge(buf, .left)) {
+                info("  !! {} got right {} >> {}", .{ self.id, other.id, buf });
+                self.right_link = other;
+                other.left_link = self;
+                matches += 1;
+                continue;
             }
         }
 
@@ -183,6 +251,7 @@ pub fn main() !void {
     print("p1: {}\n", .{p1});
 
     // do p2
+    // NOT DONE AT ALL YET!
 
     // the dragon as depicted in task
     // steps: {x, y}
