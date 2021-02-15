@@ -5,6 +5,7 @@ const info = std.log.info;
 const print = std.debug.print;
 const fmt = std.fmt;
 const ArrayList = std.ArrayList;
+const assert = std.debug.assert;
 
 const utils = @import("utils.zig");
 
@@ -48,9 +49,6 @@ const Tile = struct {
     bot_link: ?*Tile = null,
     left_link: ?*Tile = null,
     right_link: ?*Tile = null,
-    //links: struct {
-    //    top: ?*Tile, lef: ?*Tile, bot: ?*Tile, rig: ?*Tile
-    //} = undefined,
 
     pub fn init(line: []const u8) !Tile {
         const id = try std.fmt.parseInt(usize, line[5 .. line.len - 1], 10);
@@ -61,7 +59,7 @@ const Tile = struct {
         std.mem.copy(u8, self.data[row][0..], line[0..line.len]);
     }
 
-    fn can_rotate(self: *Tile) bool {
+    fn can_transform(self: *Tile) bool {
         return self.top_link == null and self.left_link == null and self.right_link == null and self.bot_link == null;
     }
 
@@ -93,35 +91,44 @@ const Tile = struct {
     }
 
     pub fn match_edge(self: *Tile, target: [DIM]u8, edge: Edge) bool {
-        var i: u32 = 0;
         var buf: [DIM]u8 = undefined;
+
+        // FANK: Remove me
+        var sanity_check: [DIM]u8 = undefined;
+        std.mem.copy(u8, &sanity_check, &self.data[DIM - 1]);
+
+        var i: u32 = 0;
         while (i < 4) : (i += 1) {
-            self.get_edge(edge, &buf, false);
+            self.get_edge(edge, &buf);
             if (std.mem.eql(u8, &target, &buf)) return true;
 
+            if (!self.can_transform()) { // can't transform this piece
+                break;
+            }
+
             self.flip_v();
-            self.get_edge(edge, &buf, false);
+            self.get_edge(edge, &buf);
             if (std.mem.eql(u8, &target, &buf)) return true;
 
             self.flip_h();
-            self.get_edge(edge, &buf, false);
+            self.get_edge(edge, &buf);
             if (std.mem.eql(u8, &target, &buf)) return true;
 
             self.flip_v();
-            self.get_edge(edge, &buf, false);
+            self.get_edge(edge, &buf);
             if (std.mem.eql(u8, &target, &buf)) return true;
 
-            if (!self.can_rotate()) { // no rotations allowed
-                break;
-            }
+            self.flip_h(); // restore
 
             self.rotate_r();
         }
 
+        assert(std.mem.eql(u8, &sanity_check, &self.data[DIM - 1]));
+
         return false;
     }
 
-    pub fn get_edge(self: *Tile, edge: Edge, output: []u8, reversed: bool) void {
+    pub fn get_edge(self: *Tile, edge: Edge, output: []u8) void {
         _ = switch (edge) {
             .top => std.mem.copy(u8, output, &self.data[0]),
             .bot => std.mem.copy(u8, output, &self.data[DIM - 1]),
@@ -132,16 +139,20 @@ const Tile = struct {
                 output[i] = row[DIM - 1];
             },
         };
-
-        if (reversed) {
-            std.mem.reverse(u8, output);
-        }
     }
 
-    pub fn process(self: *Tile, others: []Tile) usize {
-        info("=== tile {} ===", .{self.id});
+    pub fn count_neighbors(self: *Tile) usize {
+        var result: usize = 0;
+        if (self.top_link != null) result += 1;
+        if (self.bot_link != null) result += 1;
+        if (self.left_link != null) result += 1;
+        if (self.right_link != null) result += 1;
+        return result;
+    }
 
-        var matches: usize = 0;
+    pub fn process(self: *Tile, others: []Tile) void {
+        info("=== tile {} === (can transform: {})", .{ self.id, self.can_transform() });
+
         var buf: [DIM]u8 = undefined;
 
         for (self.data) |row| {
@@ -151,51 +162,46 @@ const Tile = struct {
         for (others) |*other| {
             if (other.id == self.id) continue;
 
-            info("  -- in other {}", .{other.id});
-
-            self.get_edge(.top, &buf, false);
-            info("  find top {}", .{buf});
-            if (other.match_edge(buf, .bot)) {
-                info("  !! {} got top {} >> {}", .{ self.id, other.id, buf });
+            self.get_edge(.top, &buf);
+            if (self.top_link == null and other.bot_link == null and other.match_edge(buf, .bot)) {
+                assert(other.bot_link == null);
+                //info("  !! {} got top {} >> {}", .{ self.id, other.id, buf });
                 self.top_link = other;
                 other.bot_link = self;
-                matches += 1;
+                other.process(others);
                 continue;
             }
 
-            self.get_edge(.bot, &buf, false);
-            info("  find bot {}", .{buf});
-            if (other.match_edge(buf, .top)) {
-                info("  !! {} got bot {} >> {}", .{ self.id, other.id, buf });
+            self.get_edge(.bot, &buf);
+            if (self.bot_link == null and other.top_link == null and other.match_edge(buf, .top)) {
+                assert(other.top_link == null);
+                //info("  !! {} got bot {} >> {}", .{ self.id, other.id, buf });
                 self.bot_link = other;
                 other.top_link = self;
-                matches += 1;
+                other.process(others);
                 continue;
             }
 
-            self.get_edge(.left, &buf, false);
-            info("  find left {}", .{buf});
-            if (other.match_edge(buf, .right)) {
-                info("  !! {} got left {} >> {}", .{ self.id, other.id, buf });
+            self.get_edge(.left, &buf);
+            if (self.left_link == null and other.right_link == null and other.match_edge(buf, .right)) {
+                //info("  !! {} got left {} >> {}", .{ self.id, other.id, buf });
+                assert(other.right_link == null);
                 self.left_link = other;
                 other.right_link = self;
-                matches += 1;
+                other.process(others);
                 continue;
             }
 
-            self.get_edge(.right, &buf, false);
-            info("  find right {}", .{buf});
-            if (other.match_edge(buf, .left)) {
-                info("  !! {} got right {} >> {}", .{ self.id, other.id, buf });
+            self.get_edge(.right, &buf);
+            if (self.right_link == null and other.left_link == null and other.match_edge(buf, .left)) {
+                //info("  !! {} got right {} >> {}", .{ self.id, other.id, buf });
+                assert(other.left_link == null);
                 self.right_link = other;
                 other.left_link = self;
-                matches += 1;
+                other.process(others);
                 continue;
             }
         }
-
-        // p1
-        return matches;
     }
 
     pub fn monster_tail_tips(self: *Tile) usize {
@@ -223,7 +229,6 @@ pub fn main() !void {
     var row: usize = 0;
     var cur_tile: Tile = undefined;
     while (lines.next()) |line| {
-        //info("line[{}]: >{}<", .{ row, line });
         if (std.mem.indexOf(u8, line, "Tile")) |_| {
             cur_tile = try Tile.init(line);
 
@@ -240,9 +245,14 @@ pub fn main() !void {
 
     // do p1
 
-    for (tiles) |*tile| {
-        const neighbors = tile.process(tiles);
+    tiles[0].process(tiles);
+
+    info(" ===================== PROCESS ================================", .{});
+    for (tiles) |*tile, i| {
         // find tiles that have only 2 neighbors - thus are in the corners
+        // info("p1 in prog ({}/{}): {}", .{ i + 1, tiles.len, p1 });
+        const neighbors = tile.count_neighbors();
+        assert(neighbors == 2 or neighbors == 3 or neighbors == 4);
         if (neighbors == 2) {
             p1 *= tile.id;
         }
