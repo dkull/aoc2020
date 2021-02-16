@@ -17,31 +17,6 @@ const Edge = enum {
     left, right, top, bot
 };
 
-fn cmpPalindrome(a: []const u8, b: []const u8) bool {
-    for (a) |aa, i| {
-        if (aa != b[i]) {
-            break;
-        }
-    } else {
-        return true;
-    }
-
-    for (a) |aa, j| {
-        if (aa != b[DIM - 1 - j]) {
-            break;
-        }
-    } else {
-        return true;
-    }
-
-    return false;
-}
-
-const ProcessResponse = struct {
-    neighbors_cnt: usize,
-    is_topleft_corner: bool,
-};
-
 const Tile = struct {
     id: usize,
     data: [DIM][DIM]u8 = undefined,
@@ -93,10 +68,6 @@ const Tile = struct {
     pub fn match_edge(self: *Tile, target: [DIM]u8, edge: Edge) bool {
         var buf: [DIM]u8 = undefined;
 
-        // FANK: Remove me
-        var sanity_check: [DIM]u8 = undefined;
-        std.mem.copy(u8, &sanity_check, &self.data[DIM - 1]);
-
         var i: usize = 0;
         while (i < 4) : (i += 1) {
             self.get_edge(edge, &buf);
@@ -122,8 +93,6 @@ const Tile = struct {
 
             self.rotate_r();
         }
-
-        assert(std.mem.eql(u8, &sanity_check, &self.data[DIM - 1]));
 
         return false;
     }
@@ -151,21 +120,16 @@ const Tile = struct {
     }
 
     pub fn process(self: *Tile, others: []Tile) void {
-        info("=== tile {} === (can transform: {})", .{ self.id, self.can_transform() });
-
         var buf: [DIM]u8 = undefined;
-
-        for (self.data) |row| {
-            info(">> {}", .{row});
-        }
 
         for (others) |*other| {
             if (other.id == self.id) continue;
 
+            // the 4 blocks are _ugly_
+
             self.get_edge(.top, &buf);
             if (self.top_link == null and other.bot_link == null and other.match_edge(buf, .bot)) {
                 assert(other.bot_link == null);
-                //info("  !! {} got top {} >> {}", .{ self.id, other.id, buf });
                 self.top_link = other;
                 other.bot_link = self;
                 other.process(others);
@@ -175,7 +139,6 @@ const Tile = struct {
             self.get_edge(.bot, &buf);
             if (self.bot_link == null and other.top_link == null and other.match_edge(buf, .top)) {
                 assert(other.top_link == null);
-                //info("  !! {} got bot {} >> {}", .{ self.id, other.id, buf });
                 self.bot_link = other;
                 other.top_link = self;
                 other.process(others);
@@ -184,7 +147,6 @@ const Tile = struct {
 
             self.get_edge(.left, &buf);
             if (self.left_link == null and other.right_link == null and other.match_edge(buf, .right)) {
-                //info("  !! {} got left {} >> {}", .{ self.id, other.id, buf });
                 assert(other.right_link == null);
                 self.left_link = other;
                 other.right_link = self;
@@ -194,7 +156,6 @@ const Tile = struct {
 
             self.get_edge(.right, &buf);
             if (self.right_link == null and other.left_link == null and other.match_edge(buf, .left)) {
-                //info("  !! {} got right {} >> {}", .{ self.id, other.id, buf });
                 assert(other.left_link == null);
                 self.right_link = other;
                 other.left_link = self;
@@ -219,13 +180,9 @@ const Tile = struct {
             return (self.left_link orelse unreachable).distance_from_left() + 1;
         }
     }
-
-    pub fn monster_tail_tips(self: *Tile) usize {
-        return 1;
-    }
 };
 
-pub fn rotate_2d_array(allo: *std.mem.Allocator, data: [][]u8) !void {
+pub fn rotate_2d_matrix(allo: *std.mem.Allocator, data: [][]u8) !void {
     var result = try allo.alloc([]u8, data[0].len);
     for (result) |_, i_| {
         result[i_] = try allo.alloc(u8, data.len);
@@ -271,7 +228,6 @@ pub fn part2(data: [][]u8, steps: [][2]i32) usize {
     while (y < data.len) : (y += 1) {
         var x: usize = 0;
         while (x < data[0].len) : (x += 1) {
-            //info("tracing dragon from {}x{}", .{ y, x });
             const is_dragon_tail_tip = trace_dragon(data, y, x, steps);
             if (is_dragon_tail_tip) dragon_count += 1;
         }
@@ -319,10 +275,7 @@ pub fn main() !void {
 
     info(" ===================== PROCESS ================================", .{});
     for (tiles) |*tile, i| {
-        // find tiles that have only 2 neighbors - thus are in the corners
-        // info("p1 in prog ({}/{}): {}", .{ i + 1, tiles.len, p1 });
         const neighbors = tile.count_neighbors();
-        assert(neighbors == 2 or neighbors == 3 or neighbors == 4);
         if (neighbors == 2) {
             p1 *= tile.id;
         }
@@ -347,15 +300,17 @@ pub fn main() !void {
         }
     }
 
-    info("we have {}x{} tiles", .{ width, height });
-
     // allocate one big 2d-array
     var allmap = try allo.alloc([]u8, (height + 1) * (DIM - 2));
     for (allmap) |_, i| {
         allmap[i] = try allo.alloc(u8, (width + 1) * (DIM - 2));
     }
-
-    info("allocated big map {}x{}", .{ allmap.len, allmap[0].len });
+    defer {
+        for (allmap) |_, i| {
+            allo.free(allmap[i]);
+        }
+        allo.free(allmap);
+    }
 
     // draw all tiles into correct coordinates
     for (tiles) |*tile| {
@@ -373,7 +328,6 @@ pub fn main() !void {
 
     // the dragon as depicted in task
     // steps: {x, y}
-    // fixme, make this const
     var p2_pattern = [_][2]i32{
         [_]i32{ 0, 0 },
         [_]i32{ 1, 1 },
@@ -394,29 +348,23 @@ pub fn main() !void {
 
     var monster_count: usize = 0;
 
-    var fin_rot: usize = 0;
-    while (fin_rot < 4) : (fin_rot += 1) {
-        info("====", .{});
-        for (allmap) |row3, i| {
-            info(">row: {}> {}", .{ i, row3 });
-        }
-
+    var rot: usize = 0;
+    while (rot < 4) : (rot += 1) {
         monster_count += part2(allmap, p2_pattern[0..]);
-        rotate_2d_array(allo, allmap) catch unreachable;
+        rotate_2d_matrix(allo, allmap) catch unreachable;
     }
     print("monster count: {}\n", .{monster_count});
 
+    // count all hash signs
     var hash_count: usize = 0;
     for (allmap) |row4| {
         hash_count += std.mem.count(u8, row4, "#");
     }
+
+    // calc p2 from hash signs and dragon symbol count
     print("p2: {}\n", .{hash_count - (monster_count * p2_pattern.len)});
 
     // end
-    for (allmap) |_, i| {
-        allo.free(allmap[i]);
-    }
-    allo.free(allmap);
     const delta = @divTrunc(std.time.nanoTimestamp(), 1000) - begin;
     print("all done in {} microseconds\n", .{delta});
 }
