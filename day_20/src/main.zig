@@ -66,15 +66,15 @@ const Tile = struct {
     fn rotate_r(self: *Tile) void {
         var new_data: [DIM][DIM]u8 = undefined;
 
-        var i: u32 = 0;
+        var i: usize = 0;
         while (i < DIM) : (i += 1) {
-            var j: u32 = 0;
+            var j: usize = 0;
             while (j < DIM) : (j += 1) {
                 new_data[i][j] = self.data[DIM - j - 1][i];
             }
         }
 
-        var k: u32 = 0;
+        var k: usize = 0;
         while (k < DIM) : (k += 1) {
             std.mem.copy(u8, &self.data[k], &new_data[k]);
         }
@@ -97,7 +97,7 @@ const Tile = struct {
         var sanity_check: [DIM]u8 = undefined;
         std.mem.copy(u8, &sanity_check, &self.data[DIM - 1]);
 
-        var i: u32 = 0;
+        var i: usize = 0;
         while (i < 4) : (i += 1) {
             self.get_edge(edge, &buf);
             if (std.mem.eql(u8, &target, &buf)) return true;
@@ -204,10 +204,80 @@ const Tile = struct {
         }
     }
 
+    pub fn distance_from_top(self: *Tile) usize {
+        if (self.top_link == null) {
+            return 0;
+        } else {
+            return (self.top_link orelse unreachable).distance_from_top() + 1;
+        }
+    }
+
+    pub fn distance_from_left(self: *Tile) usize {
+        if (self.left_link == null) {
+            return 0;
+        } else {
+            return (self.left_link orelse unreachable).distance_from_left() + 1;
+        }
+    }
+
     pub fn monster_tail_tips(self: *Tile) usize {
         return 1;
     }
 };
+
+pub fn rotate_2d_array(allo: *std.mem.Allocator, data: [][]u8) !void {
+    var result = try allo.alloc([]u8, data[0].len);
+    for (result) |_, i_| {
+        result[i_] = try allo.alloc(u8, data.len);
+    }
+
+    for (data) |row, i| {
+        for (row) |col, j| {
+            result[i][j] = data[data.len - j - 1][i];
+        }
+    }
+
+    for (data) |row, i| {
+        std.mem.copy(u8, data[i], result[i]);
+        allo.free(result[i]);
+    }
+    allo.free(result);
+}
+
+pub fn trace_dragon(data: [][]u8, y: usize, x: usize, steps: [][2]i32) bool {
+    if (steps.len == 0) {
+        return true;
+    }
+
+    const new_x = @intCast(i32, x) + steps[0][0];
+    const new_y = @intCast(i32, y) + steps[0][1];
+
+    if (new_y < 0 or new_y >= data.len or new_x < 0 or new_x >= data[0].len) {
+        return false;
+    }
+
+    const tile = data[@intCast(usize, new_y)][@intCast(usize, new_x)];
+    if (tile != '#') {
+        return false;
+    }
+
+    return trace_dragon(data, @intCast(usize, new_y), @intCast(usize, new_x), steps[1..]);
+}
+
+pub fn part2(data: [][]u8, steps: [][2]i32) usize {
+    var dragon_count: usize = 0;
+
+    var y: usize = 0;
+    while (y < data.len) : (y += 1) {
+        var x: usize = 0;
+        while (x < data[0].len) : (x += 1) {
+            //info("tracing dragon from {}x{}", .{ y, x });
+            const is_dragon_tail_tip = trace_dragon(data, y, x, steps);
+            if (is_dragon_tail_tip) dragon_count += 1;
+        }
+    }
+    return dragon_count;
+}
 
 pub fn main() !void {
     const begin = @divTrunc(std.time.nanoTimestamp(), 1000);
@@ -261,39 +331,92 @@ pub fn main() !void {
     print("p1: {}\n", .{p1});
 
     // do p2
-    // NOT DONE AT ALL YET!
+
+    var width: usize = 0;
+    var height: usize = 0;
+
+    // determine large dimensions
+    for (tiles) |*tile| {
+        const dist_top = tile.distance_from_top();
+        const dist_left = tile.distance_from_left();
+        if (dist_top > height) {
+            height = dist_top;
+        }
+        if (dist_left > width) {
+            width = dist_left;
+        }
+    }
+
+    info("we have {}x{} tiles", .{ width, height });
+
+    // allocate one big 2d-array
+    var allmap = try allo.alloc([]u8, (height + 1) * (DIM - 2));
+    for (allmap) |_, i| {
+        allmap[i] = try allo.alloc(u8, (width + 1) * (DIM - 2));
+    }
+
+    info("allocated big map {}x{}", .{ allmap.len, allmap[0].len });
+
+    // draw all tiles into correct coordinates
+    for (tiles) |*tile| {
+        const dist_top = tile.distance_from_top();
+        const dist_left = tile.distance_from_left();
+
+        for (tile.data) |row2, i| {
+            if (i == 0 or i == DIM - 1) continue; // skip first and last row
+
+            const top = dist_top * (DIM - 2);
+            const left = dist_left * (DIM - 2);
+            std.mem.copy(u8, allmap[top + i - 1][left .. left + DIM - 2], row2[1 .. DIM - 1]);
+        }
+    }
 
     // the dragon as depicted in task
     // steps: {x, y}
-    const p2_pattern = [_][2]i32{
+    // fixme, make this const
+    var p2_pattern = [_][2]i32{
         [_]i32{ 0, 0 },
-        [_]i32{ 1, -1 },
-        [_]i32{ 2, 0 },
         [_]i32{ 1, 1 },
+        [_]i32{ 3, 0 },
+        [_]i32{ 1, -1 },
         [_]i32{ 1, 0 },
-        [_]i32{ 1, -1 },
-        [_]i32{ 2, 0 },
         [_]i32{ 1, 1 },
+        [_]i32{ 3, 0 },
+        [_]i32{ 1, -1 },
         [_]i32{ 1, 0 },
+        [_]i32{ 1, 1 },
+        [_]i32{ 3, 0 },
         [_]i32{ 1, -1 },
-        [_]i32{ 2, 0 },
-        [_]i32{ 1, 1 },
-        [_]i32{ 1, 1 },
-        [_]i32{ 0, -1 },
+        [_]i32{ 1, -1 },
+        [_]i32{ 0, 1 },
         [_]i32{ 1, 0 },
     };
 
     var monster_count: usize = 0;
-    for (tiles) |*tile| {
-        //info("topleft: {} {}", .{ tile.id, tile.links });
-        //if (tile.links.top == null and tile.links.lef == null) {
-        //    info("topleft: {} {}", .{ tile.id, tile.links });
-        //}
-        monster_count += tile.monster_tail_tips();
+
+    var fin_rot: usize = 0;
+    while (fin_rot < 4) : (fin_rot += 1) {
+        info("====", .{});
+        for (allmap) |row3, i| {
+            info(">row: {}> {}", .{ i, row3 });
+        }
+
+        monster_count += part2(allmap, p2_pattern[0..]);
+        rotate_2d_array(allo, allmap) catch unreachable;
     }
     print("monster count: {}\n", .{monster_count});
 
+    var hash_count: usize = 0;
+    for (allmap) |row4| {
+        hash_count += std.mem.count(u8, row4, "#");
+    }
+    print("p2: {}\n", .{hash_count - (monster_count * p2_pattern.len)});
+
     // end
+    for (allmap) |_, i| {
+        allo.free(allmap[i]);
+    }
+    allo.free(allmap);
     const delta = @divTrunc(std.time.nanoTimestamp(), 1000) - begin;
     print("all done in {} microseconds\n", .{delta});
 }
