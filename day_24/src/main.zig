@@ -14,6 +14,7 @@ var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const Step = enum {
     e, se, sw, w, nw, ne
 };
+const AllSteps = [_]Step{ .e, .w, .se, .sw, .ne, .nw };
 
 const Coordinate = struct {
     x: isize,
@@ -73,6 +74,35 @@ fn follow_steps(steps: []Step, output: *Coordinate) void {
     }
 }
 
+fn process_tile(coord: Coordinate, tiles: std.AutoHashMap(Coordinate, bool)) bool {
+    const am_flipped = tiles.get(coord) orelse false;
+    var flipped: usize = 0;
+
+    for (AllSteps) |step| {
+        var neighbor_coord = Coordinate{ .x = coord.x, .y = coord.y };
+        follow_steps(&[_]Step{step}, &neighbor_coord);
+        const maybe_neighbor = tiles.get(neighbor_coord);
+        if (maybe_neighbor) |neighbor| {
+            if (neighbor) flipped += 1;
+        }
+    }
+
+    if (am_flipped) {
+        return !(flipped == 0 or flipped > 2);
+    } else {
+        return (flipped == 2);
+    }
+}
+
+fn count_flipped(tiles: std.AutoHashMap(Coordinate, bool)) usize {
+    var iter = tiles.iterator();
+    var output: usize = 0;
+    while (iter.next()) |key_val| {
+        if (key_val.value) output += 1;
+    }
+    return output;
+}
+
 pub fn main() !void {
     const begin = @divTrunc(std.time.nanoTimestamp(), 1000);
 
@@ -88,7 +118,6 @@ pub fn main() !void {
     // setup
     //
 
-    // p1
     var seen_tiles = std.AutoHashMap(Coordinate, bool).init(allo);
     defer seen_tiles.deinit();
 
@@ -108,12 +137,41 @@ pub fn main() !void {
         }
     }
 
-    var p1: usize = 0;
-    var iter = seen_tiles.iterator();
-    while (iter.next()) |key_val| {
-        if (key_val.value) p1 += 1;
+    // p1
+    //
+
+    print("p1: {}\n", .{count_flipped(seen_tiles)});
+
+    // p2
+    //
+    var day: usize = 0;
+    while (day < 100) : (day += 1) {
+        var new_seen_tiles = std.AutoHashMap(Coordinate, bool).init(allo);
+
+        var tile_iter = seen_tiles.iterator();
+        while (tile_iter.next()) |key_val| {
+            // process all existing tiles
+            const coordinate = key_val.key;
+            const tile_new_state = process_tile(coordinate, seen_tiles);
+            // only put flipped tiles - saves memory and processing
+            if (tile_new_state) {
+                new_seen_tiles.put(coordinate, true) catch unreachable;
+            }
+            for (AllSteps) |step| {
+                var neighbor_coord = Coordinate{ .x = coordinate.x, .y = coordinate.y };
+                follow_steps(&[_]Step{step}, &neighbor_coord);
+                const neighbor_new_state = process_tile(neighbor_coord, seen_tiles);
+                if (neighbor_new_state) {
+                    new_seen_tiles.put(neighbor_coord, neighbor_new_state) catch unreachable;
+                }
+            }
+        }
+        seen_tiles.clearAndFree();
+        seen_tiles = new_seen_tiles;
     }
-    print("p1: {}\n", .{p1});
+
+    // p2 final
+    print("p2: {}\n", .{count_flipped(seen_tiles)});
 
     // end
     //
