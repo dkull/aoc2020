@@ -7,9 +7,9 @@ do
 		continue;
 	fi;
 	echo "# ${dir##*/}"   # print everything after the final "/"
-	cd $dir
+	cd $dir > /dev/null
 	zig build -Drelease-fast 2>/dev/null
 	timeout 5s ./zig-cache/bin/* 2>&1 | grep "all done" | tail -n 2
-	cd -
+	cd - > /dev/null
 done
 
